@@ -575,27 +575,14 @@ def print_summary(pageSize, mem, activeM, hierarchyRows, ratioRows, mmapRows, cl
     )
     print("=" * 72)
 
-def main():
+def hierarchy_size_list():
     """
-    Measure VMM page size and access times, then time C/M thrashing ratios.
+    Return the buffer sizes used in the hierarchy probe phase.
     Input: none.
-    Output: printed tables (and returned result dict).
-    Locals: pageSize, mem, hierarchySizes, baseOps, hierarchyRows, cliff,
-            activeM, headroom, ballast, ratioList, maxCBytes, ratioRows,
-            mmapRatios, mmapRows.
+    Output: list of sizes in bytes.
+    Locals: none.
     """
-    pageSize = get_page_size()
-    mem = get_memory_status()
-    print("Virtual memory management influence experiment")
-    print(f"page size: {pageSize} bytes")
-    print(
-        f"physical RAM total={format_mib(mem['totalPhys'])} MiB  "
-        f"avail={format_mib(mem['availPhys'])} MiB  "
-        f"load={mem['loadPct']}%"
-    )
-    print()
-
-    hierarchySizes = [
+    return [
         4 * 1024,
         16 * 1024,
         64 * 1024,
@@ -607,15 +594,15 @@ def main():
         256 * 1024 * 1024,
         512 * 1024 * 1024,
     ]
-    baseOps = 4_000_000
-    print("Phase 1: hierarchy probe (no ballast)")
-    hierarchyRows = probe_hierarchy(pageSize, hierarchySizes, baseOps)
-    cliff = estimate_cache_cliff(hierarchyRows)
-    print()
 
-    activeM = 32 * 1024 * 1024
-    headroom = 32 * 1024 * 1024
-    ratioList = [
+def ratio_value_list():
+    """
+    Return the C/M ratios timed against the forced active set M.
+    Input: none.
+    Output: list of float ratios.
+    Locals: none.
+    """
+    return [
         0.5,
         0.6,
         0.7,
@@ -632,11 +619,40 @@ def main():
         10.0,
         100.0,
     ]
-    maxCBytes = min(
+
+def choose_max_c_bytes(activeM):
+    """
+    Cap C so ratio trials stay within pagefile and a 100 M multiple.
+    Input: activeM.
+    Output: max C in bytes.
+    Locals: none.
+    """
+    return min(
         int(get_memory_status()["availPage"] * 0.40),
         int(100.0 * activeM),
         4 * 1024 * 1024 * 1024,
     )
+
+def run_hierarchy_phase(pageSize, baseOps):
+    """
+    Run Phase 1 hierarchy probe and estimate the first timing cliff.
+    Input: pageSize, baseOps.
+    Output: (hierarchyRows, cliff).
+    Locals: hierarchyRows, cliff.
+    """
+    print("Phase 1: hierarchy probe (no ballast)")
+    hierarchyRows = probe_hierarchy(pageSize, hierarchy_size_list(), baseOps)
+    cliff = estimate_cache_cliff(hierarchyRows)
+    print()
+    return hierarchyRows, cliff
+
+def run_ballast_ratio_phase(pageSize, activeM, headroom, baseOps, maxCBytes):
+    """
+    Lock ballast near M and time anonymous C/M ratio accesses.
+    Input: pageSize, activeM, headroom, baseOps, maxCBytes.
+    Output: (ballast, ratioRows).
+    Locals: ballast, ratioRows.
+    """
     print(f"safety cap for C: {format_mib(maxCBytes)} MiB")
     print(
         f"Phase 2: treat active set M = {format_mib(activeM)} MiB  "
@@ -646,21 +662,65 @@ def main():
     if ballast is None:
         print("warning: ballast not built, ratios may stay in core")
     ratioRows = run_ratio_experiment(
-        activeM, pageSize, ratioList, baseOps, maxCBytes
+        activeM, pageSize, ratio_value_list(), baseOps, maxCBytes
     )
+    return ballast, ratioRows
 
+def run_mmap_phase(activeM, pageSize, baseOps, maxCBytes):
+    """
+    Run Phase 3 file-backed mmap timings for selected C/M ratios.
+    Input: activeM, pageSize, baseOps, maxCBytes.
+    Output: mmapRows.
+    Locals: mmapRatios.
+    """
     print()
     print("Phase 3: file-backed mmap ratios (page cache / disk faults)")
     mmapRatios = [0.5, 1.0, 1.5, 2.0, 5.0, 10.0, 100.0]
-    mmapRows = run_mmap_ratio_subset(
+    return run_mmap_ratio_subset(
         activeM, pageSize, mmapRatios, baseOps, maxCBytes
     )
 
-    if ballast is not None:
-        unlock_buffer_pages(ballast, 2 * 1024 * 1024)
-        del ballast
-        gc.collect()
+def release_ballast(ballast):
+    """
+    Unlock and drop the ballast buffer if one was built.
+    Input: ballast or None.
+    Output: none.
+    Locals: none.
+    """
+    if ballast is None:
+        return
+    unlock_buffer_pages(ballast, 2 * 1024 * 1024)
+    del ballast
+    gc.collect()
 
+def main():
+    """
+    Measure VMM page size and access times, then time C/M thrashing ratios.
+    Input: none.
+    Output: printed tables (and returned result dict).
+    Locals: pageSize, mem, baseOps, hierarchyRows, cliff, activeM, headroom,
+            maxCBytes, ballast, ratioRows, mmapRows, memEnd.
+    """
+    pageSize = get_page_size()
+    mem = get_memory_status()
+    print("Virtual memory management influence experiment")
+    print(f"page size: {pageSize} bytes")
+    print(
+        f"physical RAM total={format_mib(mem['totalPhys'])} MiB  "
+        f"avail={format_mib(mem['availPhys'])} MiB  "
+        f"load={mem['loadPct']}%"
+    )
+    print()
+    baseOps = 4_000_000
+    hierarchyRows, cliff = run_hierarchy_phase(pageSize, baseOps)
+    activeM = 32 * 1024 * 1024
+    headroom = 32 * 1024 * 1024
+    maxCBytes = choose_max_c_bytes(activeM)
+    ballast, ratioRows = run_ballast_ratio_phase(
+        pageSize, activeM, headroom, baseOps, maxCBytes
+    )
+    mmapRows = run_mmap_phase(activeM, pageSize, baseOps, maxCBytes)
+    release_ballast(ballast)
     memEnd = get_memory_status()
     print_summary(
         pageSize, memEnd, activeM, hierarchyRows, ratioRows, mmapRows, cliff

@@ -116,11 +116,12 @@ def main():
     """
     sizeList = [16, 64, 256, 1024, 4096, 16384]
     mList = [1677721600, 13421772800]
-    repeatCount = 1
+    repeatCount = 3
     print(
         "Leiss p.126 algorithm: while more input, "
         "read [i,j,x], M[i,j] += x\n"
         "float32 matrix, random triples via LCG, init not timed\n"
+        f"each (n,m) timed {repeatCount} times; table reports the minimum\n"
     )
     warm_up_kernel()
     results = []

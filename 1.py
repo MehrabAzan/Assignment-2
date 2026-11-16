@@ -1,17 +1,31 @@
 class Node:
     def __init__(self, value, next=None):
+        """
+        Build one singly linked list node.
+        Input: value, optional next node.
+        Output: none; sets value and next fields.
+        Locals: none.
+        """
         self.value = value
         self.next = next
 
 class LinkedList:
-    # Constructor.
     def __init__(self):
-        # The first node in the linked list.
-        # The head is either a Node object or None if the list is empty.
+        """
+        Create an empty linked list.
+        Input: none.
+        Output: none; head starts as None.
+        Locals: none.
+        """
         self.head = None
 
-    # Method. Adds a node with specified value to the end of the list.
     def append(self, value):
+        """
+        Append a new node with the given value at the end of the list.
+        Input: value to store.
+        Output: none; list grows by one node.
+        Locals: newNode, current.
+        """
         newNode = Node(value)
         if self.head is None:
             self.head = newNode
@@ -23,18 +37,16 @@ class LinkedList:
 
 def share_common_node(head1, head2):
     """
-    Return True if the two linked lists share any Node by identity (reference),
-    not by value.
-
-    Collects node references from the first list in a set, then scans the second
-    list for membership. Time: O(n). Space: O(n).
+    Decide whether two singly linked lists share any Node by object identity.
+    Input: head1, head2 (list heads, may be None).
+    Output: True if some Node object appears on both lists, else False.
+    Locals: seenNodes, current.
     """
     seenNodes = set()
     current = head1
     while current:
         seenNodes.add(current)
         current = current.next
-
     current = head2
     while current:
         if current in seenNodes:

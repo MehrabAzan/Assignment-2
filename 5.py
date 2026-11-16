@@ -37,6 +37,12 @@ def build_matrix(val):
 
 class AvlNode:
     def __init__(self, val):
+        """
+        Create one AVL node with a fat matrix for key val.
+        Input: val.
+        Output: none; sets val, matrix, children, height.
+        Locals: none.
+        """
         self.val = val
         self.matrix = build_matrix(val)
         self.left = None
@@ -267,90 +273,84 @@ def window_means(times, windowSize):
         out.append((i, meanUs))
     return out
 
-def run_experiment(opCount, maxNodes, valueMax, seed):
+def apply_insert(root, present, valueMax, insertTimes, allOpTimes):
     """
-    Run opCount insert or delete ops on a fat-node AVL tree.
-    Input: opCount, maxNodes, valueMax, seed.
-    Output: result dict with timings and GC snapshots.
-    Locals: root, present, insertTimes, deleteTimes, allOpTimes, gcSamples,
-            gc_callback, collectionsSeen, opIndex, action, val,
-            t0, t1, inserted, deleted, maxObserved, startWall, endWall,
-            elapsed, forcedBefore, forcedAfter.
+    Insert one fresh key into the AVL tree and record its elapsed time.
+    Input: root, present, valueMax, insertTimes, allOpTimes.
+    Output: updated root (present and timing lists updated in place).
+    Locals: val, t0, t1, inserted, elapsed.
     """
-    random.seed(seed)
-    gc.enable()
-    forcedBefore = gc.collect()
-    tracemalloc.start()
-    collectionsSeen = []
+    val = random.randint(0, valueMax)
+    while val in present:
+        val = random.randint(0, valueMax)
+    t0 = time.perf_counter()
+    root, inserted = insert_node(root, val)
+    t1 = time.perf_counter()
+    if inserted:
+        present.add(val)
+        elapsed = t1 - t0
+        insertTimes.append(elapsed)
+        allOpTimes.append(elapsed)
+    return root
 
-    def gc_callback(phase, info):
-        if phase == "start":
-            collectionsSeen.append(
-                {
-                    "generation": info.get("generation", -1),
-                    "opIndex": len(allOpTimes),
-                }
-            )
+def apply_delete(root, present, deleteTimes, allOpTimes):
+    """
+    Delete one present key from the AVL tree and record its elapsed time.
+    Input: root, present, deleteTimes, allOpTimes.
+    Output: updated root (present and timing lists updated in place).
+    Locals: val, t0, t1, deleted, elapsed.
+    """
+    val = random.choice(tuple(present))
+    t0 = time.perf_counter()
+    root, deleted = delete_node(root, val)
+    t1 = time.perf_counter()
+    if deleted:
+        present.discard(val)
+        elapsed = t1 - t0
+        deleteTimes.append(elapsed)
+        allOpTimes.append(elapsed)
+    return root
 
-    gc.callbacks.append(gc_callback)
-    root = None
-    present = set()
-    insertTimes = []
-    deleteTimes = []
-    allOpTimes = []
-    gcSamples = []
-    maxObserved = 0
-    record_gc_snapshot("start", gcSamples)
-    startWall = time.perf_counter()
-    for opIndex in range(opCount):
-        action = choose_action(len(present), maxNodes)
-        if action == "insert":
-            if len(present) >= valueMax + 1:
-                action = "delete"
-            else:
-                val = random.randint(0, valueMax)
-                while val in present:
-                    val = random.randint(0, valueMax)
-                t0 = time.perf_counter()
-                root, inserted = insert_node(root, val)
-                t1 = time.perf_counter()
-                if inserted:
-                    present.add(val)
-                    elapsed = t1 - t0
-                    insertTimes.append(elapsed)
-                    allOpTimes.append(elapsed)
-        if action == "delete":
-            if not present:
-                continue
-            val = random.choice(tuple(present))
-            t0 = time.perf_counter()
-            root, deleted = delete_node(root, val)
-            t1 = time.perf_counter()
-            if deleted:
-                present.discard(val)
-                elapsed = t1 - t0
-                deleteTimes.append(elapsed)
-                allOpTimes.append(elapsed)
-        if len(present) > maxObserved:
-            maxObserved = len(present)
-        if (opIndex + 1) % (opCount // 10) == 0:
-            record_gc_snapshot(f"after_{opIndex + 1}", gcSamples)
-            print(
-                f"progress {opIndex + 1}/{opCount}  "
-                f"|tree|={len(present)}  "
-                f"inserts={len(insertTimes)}  deletes={len(deleteTimes)}  "
-                f"gc_callbacks={len(collectionsSeen)}"
-            )
-            sys.stdout.flush()
-    endWall = time.perf_counter()
-    record_gc_snapshot("end", gcSamples)
-    forcedAfter = gc.collect()
-    if gc_callback in gc.callbacks:
-        gc.callbacks.remove(gc_callback)
-    peakMb = tracemalloc.get_traced_memory()[1] / (1024 * 1024)
-    tracemalloc.stop()
+def report_progress(opIndex, opCount, present, insertTimes, deleteTimes, collectionsSeen, gcSamples):
+    """
+    Snapshot GC state and print a progress line every tenth of the run.
+    Input: opIndex, opCount, present, insertTimes, deleteTimes, collectionsSeen, gcSamples.
+    Output: none.
+    Locals: none.
+    """
+    if (opIndex + 1) % (opCount // 10) != 0:
+        return
+    record_gc_snapshot(f"after_{opIndex + 1}", gcSamples)
+    print(
+        f"progress {opIndex + 1}/{opCount}  "
+        f"|tree|={len(present)}  "
+        f"inserts={len(insertTimes)}  deletes={len(deleteTimes)}  "
+        f"gc_callbacks={len(collectionsSeen)}"
+    )
+    sys.stdout.flush()
+
+def pack_experiment_result(
+    wallSeconds,
+    maxObserved,
+    present,
+    insertTimes,
+    deleteTimes,
+    allOpTimes,
+    gcSamples,
+    collectionsSeen,
+    peakMb,
+    forcedBefore,
+    forcedAfter,
+):
+    """
+    Build the result dictionary for one completed experiment run.
+    Input: wallSeconds, maxObserved, present, timing lists, gcSamples,
+           collectionsSeen, peakMb, forcedBefore, forcedAfter.
+    Output: result dict with summaries and GC data.
+    Locals: none.
+    """
     return {
-        "wallSeconds": endWall - startWall,
+        "wallSeconds": wallSeconds,
         "maxObserved": maxObserved,
         "finalSize": len(present),
         "insertSummary": summarize_times(insertTimes),
@@ -366,6 +366,78 @@ def run_experiment(opCount, maxNodes, valueMax, seed):
         "forcedBefore": forcedBefore,
         "forcedAfter": forcedAfter,
     }
+
+def run_experiment(opCount, maxNodes, valueMax, seed):
+    """
+    Run opCount insert or delete ops on a fat-node AVL tree.
+    Input: opCount, maxNodes, valueMax, seed.
+    Output: result dict with timings and GC snapshots.
+    Locals: root, present, insertTimes, deleteTimes, allOpTimes, gcSamples,
+            gc_callback, collectionsSeen, opIndex, action, maxObserved,
+            startWall, endWall, forcedBefore, forcedAfter, peakMb.
+    """
+    random.seed(seed)
+    gc.enable()
+    forcedBefore = gc.collect()
+    tracemalloc.start()
+    collectionsSeen = []
+    allOpTimes = []
+
+    def gc_callback(phase, info):
+        """
+        Record cyclic GC start events during the timed loop.
+        Input: phase string, info dict from gc.callbacks.
+        Output: none; appends to collectionsSeen when phase is start.
+        Locals: none.
+        """
+        if phase == "start":
+            collectionsSeen.append(
+                {
+                    "generation": info.get("generation", -1),
+                    "opIndex": len(allOpTimes),
+                }
+            )
+
+    gc.callbacks.append(gc_callback)
+    root = None
+    present = set()
+    insertTimes = []
+    deleteTimes = []
+    gcSamples = []
+    maxObserved = 0
+    record_gc_snapshot("start", gcSamples)
+    startWall = time.perf_counter()
+    for opIndex in range(opCount):
+        action = choose_action(len(present), maxNodes)
+        if action == "insert" and len(present) < valueMax + 1:
+            root = apply_insert(root, present, valueMax, insertTimes, allOpTimes)
+        elif present:
+            root = apply_delete(root, present, deleteTimes, allOpTimes)
+        if len(present) > maxObserved:
+            maxObserved = len(present)
+        report_progress(
+            opIndex, opCount, present, insertTimes, deleteTimes, collectionsSeen, gcSamples
+        )
+    endWall = time.perf_counter()
+    record_gc_snapshot("end", gcSamples)
+    forcedAfter = gc.collect()
+    if gc_callback in gc.callbacks:
+        gc.callbacks.remove(gc_callback)
+    peakMb = tracemalloc.get_traced_memory()[1] / (1024 * 1024)
+    tracemalloc.stop()
+    return pack_experiment_result(
+        endWall - startWall,
+        maxObserved,
+        present,
+        insertTimes,
+        deleteTimes,
+        allOpTimes,
+        gcSamples,
+        collectionsSeen,
+        peakMb,
+        forcedBefore,
+        forcedAfter,
+    )
 
 def print_summary(result):
     """
